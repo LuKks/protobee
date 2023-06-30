@@ -55,12 +55,16 @@ test('snapshot', async function (t) {
   const { db } = await create(t)
 
   await db.put('/a', '1')
+  t.is(db.version, 2)
 
-  const snap = await db.snapshot()
+  const snap = db.snapshot()
+  t.is(snap.version, 2)
 
   await db.put('/a', '2')
+  t.is(db.version, 3)
 
   t.alike(await snap.get('/a'), { seq: 1, key: '/a', value: '1' })
+  t.is(snap.version, 2)
 
   await snap.close()
 })
@@ -72,7 +76,7 @@ test('checkout', async function (t) {
   await db.put('/a', '2')
   await db.put('/a', '3')
 
-  const snap = await db.checkout(3)
+  const snap = db.checkout(3)
   t.is(snap.version, 3)
 
   t.alike(await snap.get('/a'), { seq: 2, key: '/a', value: '2' })
@@ -85,7 +89,7 @@ test('future checkout', async function (t) {
 
   await db.put('/a', '1')
 
-  const snap = await db.checkout(3)
+  const snap = db.checkout(3)
   t.is(snap.version, 3)
 
   const get = snap.get('/a')
@@ -103,7 +107,7 @@ test('batch', async function (t) {
 
   await db.put('/a', '1')
 
-  const batch = await db.batch()
+  const batch = db.batch()
   t.is(batch.version, 2)
 
   await batch.lock()
@@ -129,13 +133,13 @@ test('batch', async function (t) {
 test('batch flush vs close', async function (t) {
   const { db } = await create(t)
 
-  const a = await db.batch()
+  const a = db.batch()
   await a.put('/a', '1')
   await a.flush()
 
   t.alike(await db.get('/a'), { seq: 1, key: '/a', value: '1' })
 
-  const b = await db.batch()
+  const b = db.batch()
   await b.put('/b', '2')
   await b.close()
 
