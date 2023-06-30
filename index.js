@@ -83,7 +83,7 @@ class Protobee extends ReadyResource {
       }
     }
 
-    await this.update()
+    await this._update()
   }
 
   async _close () {
@@ -116,13 +116,13 @@ class Protobee extends ReadyResource {
     }
   }
 
-  _createSync () {
+  _createSync (version) {
     return {
       core: {
-        length: this.core.length
+        length: version ? version - 1 : this.core.length
       },
       bee: {
-        version: this.version
+        version: version || this.version
       }
     }
   }
@@ -132,7 +132,7 @@ class Protobee extends ReadyResource {
     await this.update()
   }
 
-  async update () {
+  async _update () {
     if (this._batch) throw new Error('Update is only allowed from the main instance')
 
     const sync = await this.rpc.request('sync', { _id: this._id })
@@ -140,7 +140,14 @@ class Protobee extends ReadyResource {
     return false
   }
 
+  async update () {
+    if (this.opened === false) await this.opening
+
+    return this._update()
+  }
+
   async put (key, value, opts) {
+    if (this.opened === false) await this.opening
     if (this._id && !this._batch) throw new Error('Can not put from a snapshot')
     const cas = !!(opts && opts.cas)
 
@@ -148,10 +155,13 @@ class Protobee extends ReadyResource {
   }
 
   async get (key) {
-    return this.rpc.request('get', { _id: this._id, key })
+    if (this.opened === false) await this.opening
+
+    return this._unwrap(await this.rpc.request('get', { _id: this._id, key }))
   }
 
   async del (key, opts) {
+    if (this.opened === false) await this.opening
     if (this._id && !this._batch) throw new Error('Can not del from a snapshot')
     if (opts && opts.cas) throw new Error('CAS option for del is not supported') // There is no good default, and dangerous to run a custom func remotely
 
@@ -159,7 +169,9 @@ class Protobee extends ReadyResource {
   }
 
   async peek (range, options) {
-    return this.rpc.request('peek', { _id: this._id, range, options })
+    if (this.opened === false) await this.opening
+
+    return this._unwrap(await this.rpc.request('peek', { _id: this._id, range, options }))
   }
 
   batch () {
@@ -175,12 +187,14 @@ class Protobee extends ReadyResource {
   }
 
   async lock () {
+    if (this.opened === false) await this.opening
     if (!this._batch) throw new Error('Lock is only allowed from a batch instance')
 
-    return this.rpc.request('lock', { _id: this._id })
+    return this._unwrap(await this.rpc.request('lock', { _id: this._id }))
   }
 
   async flush () {
+    if (this.opened === false) await this.opening
     if (!this._batch) throw new Error('Flush is only allowed from a batch instance')
 
     const r = await this.rpc.request('flush', { _id: this._id })
@@ -199,7 +213,7 @@ class Protobee extends ReadyResource {
       dht: this.dht,
       rpc: this.rpc,
       _checkout: { version, options },
-      _sync: this._createSync()
+      _sync: this._createSync(version)
     })
   }
 
@@ -216,7 +230,9 @@ class Protobee extends ReadyResource {
   }
 
   async getHeader (options) {
-    return this.rpc.request('getHeader', { _id: this._id, options })
+    if (this.opened === false) await this.opening
+
+    return this._unwrap(await this.rpc.request('getHeader', { _id: this._id, options }))
   }
 }
 
@@ -330,7 +346,7 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onget (request, rpc) {
-    return this._bee(request).get(request.key)
+    return this._wrap(await this._bee(request).get(request.key), request)
   }
 
   async ondel (request, rpc) {
@@ -338,7 +354,7 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onpeek (request, rpc) {
-    return this._bee(request).peek(request.range, request.options)
+    return this._wrap(await this._bee(request).peek(request.range, request.options), request)
   }
 
   async onbatch (request, rpc) {
@@ -353,7 +369,7 @@ class ProtobeeServer extends ReadyResource {
 
   async onlock (request, rpc) {
     // TODO: should check and add protections so server doesn't crash if there is a bad client like forcing .lock() on non-batch, same for others
-    return this._bee(request).lock()
+    return this._wrap(await this._bee(request).lock(), request)
   }
 
   async onflush (request, rpc) {
@@ -390,7 +406,7 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async ongetheader (request, rpc) {
-    return this._bee(request).getHeader(request.options || {})
+    return this._wrap(await this._bee(request).getHeader(request.options || {}), request)
   }
 
   async onclose (request, rpc) {
