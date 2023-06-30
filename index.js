@@ -17,6 +17,7 @@ class Protobee extends ReadyResource {
 
     this.core = {
       key: this._keyPair.publicKey,
+      keyPair: this._keyPair,
       length: 0
     }
     this.version = 1
@@ -382,6 +383,9 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap()
   }
 
+  // TODO: createReadStream
+  // TODO: createHistoryStream
+  // TODO: createDiffStream
   // TODO: getAndWatch
   // TODO: watch
 
