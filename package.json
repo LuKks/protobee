@@ -21,23 +21,16 @@
     "standard": "^17.0.0"
   },
   "dependencies": {
-    "@hyperswarm/rpc": "github:holepunchto/rpc#add-client-respond-unrespond",
-    "b4a": "^1.6.4",
     "compact-encoding": "^2.12.0",
     "debounceify": "^1.0.0",
     "hyperbee": "^2.13.4",
     "hypercore": "^10.17.0",
-    "hypercore-crypto": "^3.3.1",
     "hyperdht": "^6.6.1",
-    "hyperswarm": "^4.5.1",
-    "keypear": "^1.1.1",
     "like-retry": "^1.1.1",
-    "protomux": "^3.5.0",
     "protomux-rpc": "^1.4.0",
     "random-access-memory": "^6.2.0",
     "ready-resource": "^1.0.0",
     "safety-catch": "^1.0.2",
-    "same-object": "^1.0.2",
-    "sodium-universal": "^4.0.0"
+    "same-object": "^1.0.2"
   }
 }
