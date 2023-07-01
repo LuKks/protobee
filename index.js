@@ -255,6 +255,8 @@ class ProtobeeServer extends ReadyResource {
     this.checkouts = new Map()
 
     this.core.on('append', this._onappend.bind(this))
+
+    this.ready().catch(safetyCatch)
   }
 
   async _open () {
