@@ -6,6 +6,7 @@ const ProtomuxRPC = require('protomux-rpc')
 const debounceify = require('debounceify')
 const retry = require('like-retry')
 const sameObject = require('same-object')
+const { Readable } = require('streamx')
 const waitForRPC = require('./lib/wait-for-rpc.js')
 const randomId = require('./lib/random-id.js')
 
@@ -209,6 +210,10 @@ class Protobee extends ReadyResource {
     return this.close()
   }
 
+  createReadStream (range, options) {
+    return new ReadStream(this, range, options)
+  }
+
   checkout (version, options) {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
 
@@ -253,6 +258,7 @@ class ProtobeeServer extends ReadyResource {
     this.connections = new Set()
 
     this.checkouts = new Map()
+    this.streams = new Map()
 
     this.core.on('append', this._onappend.bind(this))
 
@@ -278,6 +284,11 @@ class ProtobeeServer extends ReadyResource {
     for (const [id, checkout] of this.checkouts) {
       this.checkouts.delete(id)
       await checkout.close()
+    }
+
+    for (const [id, reader] of this.streams) {
+      this.streams.delete(id)
+      await reader.destroy()
     }
   }
 
@@ -308,6 +319,10 @@ class ProtobeeServer extends ReadyResource {
     rpc.respond('batch', this.onbatch.bind(this))
     rpc.respond('lock', this.onlock.bind(this))
     rpc.respond('flush', this.onflush.bind(this))
+
+    rpc.respond('read-stream-open', this.onrsopen.bind(this))
+    rpc.respond('read-stream-read', this.onrsread.bind(this))
+    rpc.respond('read-stream-destroy', this.onrsdestroy.bind(this))
 
     rpc.respond('getHeader', this.ongetheader.bind(this))
     rpc.respond('close', this.onclose.bind(this))
@@ -389,6 +404,37 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap()
   }
 
+  async onrsopen (request, rpc) {
+    const id = randomId((id) => this.streams.has(id))
+    const stream = this._bee(request).createReadStream(request.range || undefined, request.options || undefined)
+
+    const reader = new StreamReader(this, stream, { _id: request._id })
+
+    this.streams.set(id, reader)
+    // stream.once('close', () => this.streams.delete(id))
+
+    return this._wrap(id, request)
+  }
+
+  async onrsread (request, rpc) {
+    const reader = this.streams.get(request._streamId)
+    if (!reader) return this._wrap(undefined, request)
+
+    const value = await reader.read()
+    // TODO: double check that there is no need for an extra tick here (to allow 'end' event to trigger)
+
+    return this._wrap({ value, ended: reader.ended }, request)
+  }
+
+  async onrsdestroy (request, rpc) {
+    const reader = this.streams.get(request._streamId)
+    if (!reader) return this._wrap(undefined, request)
+
+    await reader.destroy()
+
+    return this._wrap(undefined, request)
+  }
+
   // TODO: createReadStream
   // TODO: createHistoryStream
   // TODO: createDiffStream
@@ -434,6 +480,119 @@ class ProtobeeServer extends ReadyResource {
 Protobee.Server = ProtobeeServer
 
 module.exports = Protobee
+
+class ReadStream extends Readable {
+  constructor (protobee, range, options) {
+    super()
+
+    this._id = protobee._id
+    this.protobee = protobee
+    this.rpc = protobee.rpc
+
+    this.range = range
+    this.options = options
+
+    this.streamId = null
+  }
+
+  _open (cb) { this._openp().then(cb, cb) }
+  _read (cb) { this._readp().then(cb, cb) }
+  _destroy (cb) { this._destroyp().then(cb, cb) }
+
+  async _openp () {
+    this.streamId = this.protobee._unwrap(await this.rpc.request('read-stream-open', { _id: this._id, range: this.range, options: this.options }))
+  }
+
+  async _readp () {
+    const { value, ended } = this.protobee._unwrap(await this.rpc.request('read-stream-read', { _id: this._id, _streamId: this.streamId }))
+
+    this.push(value)
+    if (ended) this.push(null)
+  }
+
+  async _destroyp () {
+    this.protobee._unwrap(await this.rpc.request('read-stream-destroy', { _id: this._id, _streamId: this.streamId }))
+  }
+}
+
+// Probably there is a more straightforward way for this but don't know much about streams
+class StreamReader {
+  constructor (protobee, rs, opts) {
+    this._id = opts._id
+
+    this.rs = rs
+    this.readable = false
+    this.ended = false
+    this.destroyed = this.rs.destroyed
+
+    this.rs.on('readable', this._onreadable.bind(this))
+    this.rs.on('end', this._onend.bind(this))
+    this.rs.on('close', this._onclose.bind(this))
+  }
+
+  _onreadable () {
+    this.readable = true
+  }
+
+  _onend () {
+    this.ended = true
+  }
+
+  _onclose () {
+    this.destroyed = true
+  }
+
+  async read () {
+    while (!this.readable) {
+      if (this.ended || this.destroyed) return null
+
+      const closed = await StreamReader.wait(this.rs) === false
+      if (closed) return null
+    }
+
+    // if (this.ended || this.destroyed) return null
+
+    const data = this.rs.read()
+
+    if (data === null) {
+      this.readable = false
+    }
+
+    return data
+  }
+
+  async destroy () {
+    this.rs.destroy()
+
+    if (!this.destroyed) {
+      await new Promise(resolve => this.rs.once('close', resolve))
+    }
+  }
+
+  static wait (rs) {
+    return new Promise(resolve => {
+      rs.on('readable', onreadable)
+      rs.on('end', onclose)
+      rs.on('close', onclose)
+
+      function cleanup () {
+        rs.off('readable', onreadable)
+        rs.off('end', onclose)
+        rs.off('close', onclose)
+      }
+
+      function onreadable () {
+        cleanup()
+        resolve(true)
+      }
+
+      function onclose () {
+        cleanup()
+        resolve(false)
+      }
+    })
+  }
+}
 
 function defaultCasPut (prev, next) {
   return !sameObject(prev.value, next.value, { strict: true })
