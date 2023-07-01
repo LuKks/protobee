@@ -66,6 +66,10 @@ test('snapshot', async function (t) {
   t.alike(await snap.get('/a'), { seq: 1, key: '/a', value: '1' })
   t.is(snap.version, 2)
 
+  await db.close()
+
+  t.alike(await snap.get('/a'), { seq: 1, key: '/a', value: '1' })
+
   await snap.close()
 })
 
@@ -78,6 +82,10 @@ test('checkout', async function (t) {
 
   const snap = db.checkout(3)
   t.is(snap.version, 3)
+
+  t.alike(await snap.get('/a'), { seq: 2, key: '/a', value: '2' })
+
+  await db.close()
 
   t.alike(await snap.get('/a'), { seq: 2, key: '/a', value: '2' })
 
@@ -348,6 +356,8 @@ test('diff stream with passed snap', async function (t) {
   for await (const diff of stream) {
     t.alike(diff, expected.shift())
   }
+
+  await snap.close()
 })
 
 test('diff stream with older snap as base', async function (t) {
@@ -366,6 +376,8 @@ test('diff stream with older snap as base', async function (t) {
   for await (const diff of stream) {
     t.alike(diff, expected.shift())
   }
+
+  await snap.close()
 })
 
 test('diff stream with range', async function (t) {

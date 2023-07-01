@@ -38,6 +38,7 @@ class Protobee extends ReadyResource {
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
+    this._bootstrap = !opts.dht ? opts.bootstrap : undefined
 
     this.stream = null
     this.rpc = opts.rpc
@@ -48,20 +49,6 @@ class Protobee extends ReadyResource {
   async _open () {
     if (this._batch) {
       const response = await this.rpc.request('batch')
-      this._id = response.out
-      this._applySync(response.sync)
-      return
-    }
-
-    if (this._checkout) {
-      const response = await this.rpc.request('checkout', { version: this._checkout.version, options: this._checkout.options })
-      this._id = response.out
-      this._applySync(response.sync)
-      return
-    }
-
-    if (this._snapshot) {
-      const response = await this.rpc.request('snapshot', { options: this._snapshot.options })
       this._id = response.out
       this._applySync(response.sync)
       return
@@ -90,16 +77,32 @@ class Protobee extends ReadyResource {
       }
     }
 
+    if (this._checkout) {
+      const response = await this.rpc.request('checkout', { version: this._checkout.version, options: this._checkout.options })
+      this._id = response.out
+      this._applySync(response.sync)
+      return
+    }
+
+    if (this._snapshot) {
+      const response = await this.rpc.request('checkout', { version: this.version, options: this._snapshot.options })
+      this._id = response.out
+      this._applySync(response.sync)
+      return
+    }
+
     await this._update()
   }
 
   async _close () {
     if (this._id) {
       if (!this._flushed) {
+        // Explicitily closing would not be needed if server auto destroys client linked resources
         await this.rpc.request('close', { _id: this._id })
       }
-      return
     }
+
+    if (this._batch) return
 
     await this.rpc.destroy()
 
@@ -234,8 +237,7 @@ class Protobee extends ReadyResource {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
 
     return new Protobee(this._keyPair, {
-      dht: this.dht,
-      rpc: this.rpc,
+      bootstrap: this._bootstrap, // TODO: it should share the same DHT instance but without auto destroying it if the main protobee instance closes
       _checkout: { version, options },
       _sync: this._createSync(version)
     })
@@ -244,10 +246,8 @@ class Protobee extends ReadyResource {
   snapshot (options) {
     if (this._id) throw new Error('Snapshot is only allowed from the main instance')
 
-    // TODO: it should be new independent client RPCs I think, same for others. Because closing the main instance will invalidate all snapshots, etc while that is not true in Hyperbee
     return new Protobee(this._keyPair, {
-      dht: this.dht,
-      rpc: this.rpc,
+      bootstrap: this._bootstrap,
       _snapshot: { options },
       _sync: this._createSync()
     })
@@ -273,7 +273,7 @@ class ProtobeeServer extends ReadyResource {
     this.server = null
     this.connections = new Set()
 
-    this.checkouts = new Map()
+    this.instances = new Map()
     this.streams = new Map()
 
     this.core.on('append', this._onappend.bind(this))
@@ -297,8 +297,8 @@ class ProtobeeServer extends ReadyResource {
 
     await this.bee.close()
 
-    for (const [id, checkout] of this.checkouts) {
-      this.checkouts.delete(id)
+    for (const [id, checkout] of this.instances) {
+      this.instances.delete(id)
       await checkout.close()
     }
 
@@ -357,13 +357,15 @@ class ProtobeeServer extends ReadyResource {
   }
 
   _onappend () {
+    // TODO: should detect 'append' events individually per checkout per client, etc?
+
     for (const rpc of this.connections) {
       rpc.event('sync') // TODO: I think it could send sync data here, but be aware of truncates first
     }
   }
 
   _bee (request) {
-    if (request && request._id) return this.checkouts.get(request._id)
+    if (request && request._id) return this.instances.get(request._id)
     return this.bee
   }
 
@@ -407,9 +409,9 @@ class ProtobeeServer extends ReadyResource {
   async onbatch (request, rpc) {
     const batch = this.bee.batch()
 
-    const id = randomId((id) => this.checkouts.has(id))
-    this.checkouts.set(id, batch)
-    // batch.once('close', () => this.checkouts.delete(id)) // Batch does not have 'close' event to clear itself
+    const id = randomId((id) => this.instances.has(id))
+    this.instances.set(id, batch)
+    // batch.once('close', () => this.instances.delete(id)) // Batch does not have 'close' event to clear itself
 
     return this._wrap(id, { _id: id })
   }
@@ -420,10 +422,10 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onflush (request, rpc) {
-    const batch = this.checkouts.get(request._id)
+    const batch = this.instances.get(request._id)
     if (!batch) return this._wrap()
 
-    this.checkouts.delete(request._id) // Until batch have a 'close' event
+    this.instances.delete(request._id) // Until batch have a 'close' event
     await batch.flush()
 
     return this._wrap()
@@ -483,9 +485,9 @@ class ProtobeeServer extends ReadyResource {
   async oncheckout (request, rpc) {
     const checkout = this.bee.checkout(request.version, request.options || {})
 
-    const id = randomId((id) => this.checkouts.has(id))
-    this.checkouts.set(id, checkout)
-    checkout.once('close', () => this.checkouts.delete(id))
+    const id = randomId((id) => this.instances.has(id))
+    this.instances.set(id, checkout)
+    checkout.once('close', () => this.instances.delete(id))
 
     return this._wrap(id, { _id: id })
   }
@@ -493,9 +495,9 @@ class ProtobeeServer extends ReadyResource {
   async onsnapshot (request, rpc) {
     const snapshot = this.bee.snapshot(request.options || {})
 
-    const id = randomId((id) => this.checkouts.has(id))
-    this.checkouts.set(id, snapshot)
-    snapshot.once('close', () => this.checkouts.delete(id))
+    const id = randomId((id) => this.instances.has(id))
+    this.instances.set(id, snapshot)
+    snapshot.once('close', () => this.instances.delete(id))
 
     return this._wrap(id, { _id: id })
   }
@@ -505,10 +507,10 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onclose (request, rpc) {
-    const checkout = this.checkouts.get(request._id)
+    const checkout = this.instances.get(request._id)
     if (!checkout) return this._wrap()
 
-    this.checkouts.delete(request._id) // Batch does not have 'close' event to clear itself
+    this.instances.delete(request._id) // Batch does not have 'close' event to clear itself
     await checkout.close()
 
     return this._wrap()
@@ -516,12 +518,10 @@ class ProtobeeServer extends ReadyResource {
 }
 
 class ProxyStream extends Readable {
-  constructor (protobee, type, args) {
+  constructor (db, type, args) {
     super()
 
-    this._id = protobee._id
-    this.protobee = protobee
-    this.rpc = protobee.rpc
+    this.db = db
 
     this.type = type
     this.args = args
@@ -534,18 +534,20 @@ class ProxyStream extends Readable {
   _destroy (cb) { this._destroyp().then(cb, cb) }
 
   async _openp () {
-    this.streamId = this.protobee._unwrap(await this.rpc.request(this.type, { _id: this._id, ...this.args }))
+    if (this.db.opened === false) await this.db.opening.catch(safetyCatch)
+
+    this.streamId = this.db._unwrap(await this.db.rpc.request(this.type, { _id: this.db._id, ...this.args }))
   }
 
   async _readp () {
-    const { value, ended } = this.protobee._unwrap(await this.rpc.request('stream-read', { _id: this._id, _streamId: this.streamId }))
+    const { value, ended } = this.db._unwrap(await this.db.rpc.request('stream-read', { _id: this.db._id, _streamId: this.streamId }))
 
     this.push(value)
     if (ended) this.push(null)
   }
 
   async _destroyp () {
-    this.protobee._unwrap(await this.rpc.request('stream-destroy', { _id: this._id, _streamId: this.streamId }))
+    this.db._unwrap(await this.db.rpc.request('stream-destroy', { _id: this.db._id, _streamId: this.streamId }))
   }
 }
 
