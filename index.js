@@ -421,7 +421,6 @@ class ProtobeeServer extends ReadyResource {
     if (!reader) return this._wrap(undefined, request)
 
     const value = await reader.read()
-    // TODO: double check that there is no need for an extra tick here (to allow 'end' event to trigger)
 
     return this._wrap({ value, ended: reader.ended }, request)
   }
@@ -472,7 +471,6 @@ class ProtobeeServer extends ReadyResource {
     this.checkouts.delete(request._id) // Batch does not have 'close' event to clear itself
     await checkout.close()
 
-    // Note: it syncs root bee with client
     return this._wrap()
   }
 }
@@ -549,8 +547,6 @@ class StreamReader {
       const closed = await StreamReader.wait(this.rs) === false
       if (closed) return null
     }
-
-    // if (this.ended || this.destroyed) return null
 
     const data = this.rs.read()
 
