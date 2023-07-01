@@ -379,7 +379,7 @@ class ProtobeeServer extends ReadyResource {
 
   async onflush (request, rpc) {
     const batch = this.checkouts.get(request._id)
-    if (!batch) return
+    if (!batch) return this._wrap()
 
     this.checkouts.delete(request._id) // Until batch have a 'close' event
     await batch.flush()
@@ -419,7 +419,7 @@ class ProtobeeServer extends ReadyResource {
 
   async onclose (request, rpc) {
     const checkout = this.checkouts.get(request._id)
-    if (!checkout) return
+    if (!checkout) return this._wrap()
 
     this.checkouts.delete(request._id) // Batch does not have 'close' event to clear itself
     await checkout.close()
