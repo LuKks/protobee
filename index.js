@@ -153,6 +153,7 @@ class Protobee extends ReadyResource {
   async put (key, value, opts) {
     if (this.opened === false) await this.opening
     if (this._id && !this._batch) throw new Error('Can not put from a snapshot')
+    if (opts && typeof opts.cas === 'function') throw new Error('Option cas as function is not supported')
     const cas = !!(opts && opts.cas)
 
     return this._unwrap(await this.rpc.request('put', { _id: this._id, key, value, cas }))
