@@ -172,7 +172,8 @@ test('basic peek', async function (t) {
   await db.put('/a', '1')
   await db.put('/b', '2')
 
-  t.alike(await db.peek({ reverse: false }), { seq: 1, key: '/a', value: '1' })
+  t.alike(await db.peek({ gt: '/a' }), { seq: 2, key: '/b', value: '2' })
+  t.alike(await db.peek({ reverse: true }), { seq: 2, key: '/b', value: '2' })
   t.alike(await db.peek({ reverse: true }), { seq: 2, key: '/b', value: '2' })
 })
 
