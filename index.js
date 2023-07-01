@@ -218,6 +218,12 @@ class Protobee extends ReadyResource {
     return new ProxyStream(this, 'history-stream', { options })
   }
 
+  createDiffStream (otherVersion, range, options) {
+    if (typeof otherVersion === 'object') otherVersion = otherVersion.version
+
+    return new ProxyStream(this, 'diff-stream', { otherVersion, range, options })
+  }
+
   checkout (version, options) {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
 
@@ -326,6 +332,7 @@ class ProtobeeServer extends ReadyResource {
 
     rpc.respond('read-stream', this.onreadstream.bind(this))
     rpc.respond('history-stream', this.onhistorystream.bind(this))
+    rpc.respond('diff-stream', this.ondiffstream.bind(this))
     rpc.respond('stream-read', this.onstreamread.bind(this))
     rpc.respond('stream-destroy', this.onstreamdestroy.bind(this))
 
@@ -429,6 +436,16 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap(id, request)
   }
 
+  async ondiffstream (request, rpc) {
+    const stream = this._bee(request).createDiffStream(request.otherVersion, request.range || undefined, request.options || undefined)
+
+    const id = randomId((id) => this.streams.has(id))
+    const reader = new StreamReader(this, stream, { _id: request._id })
+    this.streams.set(id, reader)
+
+    return this._wrap(id, request)
+  }
+
   async onstreamread (request, rpc) {
     const reader = this.streams.get(request._streamId)
     if (!reader) return this._wrap(undefined, request)
@@ -447,7 +464,6 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap(undefined, request)
   }
 
-  // TODO: createDiffStream
   // TODO: getAndWatch
   // TODO: watch
 
