@@ -393,12 +393,12 @@ async function create (t, opts = {}) {
 
   const core = new Hypercore(RAM)
   const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any }) // TODO: fix this (cas, etc)
-  await bee.ready()
 
-  if (opts.data) await bee.put('/test', 'abc')
-
-  const server = new Protobee.Server(bee, { bootstrap })
+  const server = new Protobee(bee, { bootstrap })
   t.teardown(() => server.close())
+
+  await core.ready()
+  if (opts.data) await bee.put('/test', 'abc')
 
   const db = new Protobee(core.keyPair, { bootstrap })
   t.teardown(() => db.close())

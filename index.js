@@ -10,6 +10,11 @@ const { Readable } = require('streamx')
 const waitForRPC = require('./lib/wait-for-rpc.js')
 const randomId = require('./lib/random-id.js')
 
+module.exports = function (input, opts) {
+  if (input.core) return new ProtobeeServer(input, opts)
+  return new Protobee(input, opts)
+}
+
 class Protobee extends ReadyResource {
   constructor (keyPair, opts = {}) {
     super()
@@ -502,10 +507,6 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap()
   }
 }
-
-Protobee.Server = ProtobeeServer
-
-module.exports = Protobee
 
 class ProxyStream extends Readable {
   constructor (protobee, type, args) {
