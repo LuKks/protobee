@@ -133,6 +133,8 @@ class Protobee extends ReadyResource {
     await this.update()
   }
 
+  // TODO: api method that does request + _id + error handling from the server response
+
   async _update () {
     if (this._batch) throw new Error('Update is only allowed from the main instance')
 
@@ -314,7 +316,7 @@ class ProtobeeServer extends ReadyResource {
 
   _onappend () {
     for (const rpc of this.connections) {
-      rpc.event('sync')
+      rpc.event('sync') // TODO: I think it could send sync data here, but be aware of truncates first
     }
   }
 
@@ -340,6 +342,8 @@ class ProtobeeServer extends ReadyResource {
       }
     }
   }
+
+  // TODO: forward error as response
 
   async onput (request, rpc) {
     const cas = request.cas ? defaultCasPut : null
