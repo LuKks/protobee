@@ -211,7 +211,11 @@ class Protobee extends ReadyResource {
   }
 
   createReadStream (range, options) {
-    return new ReadStream(this, range, options)
+    return new ProxyStream(this, 'read-stream', { range, options })
+  }
+
+  createHistoryStream (options) {
+    return new ProxyStream(this, 'history-stream', { options })
   }
 
   checkout (version, options) {
@@ -320,9 +324,10 @@ class ProtobeeServer extends ReadyResource {
     rpc.respond('lock', this.onlock.bind(this))
     rpc.respond('flush', this.onflush.bind(this))
 
-    rpc.respond('read-stream-open', this.onrsopen.bind(this))
-    rpc.respond('read-stream-read', this.onrsread.bind(this))
-    rpc.respond('read-stream-destroy', this.onrsdestroy.bind(this))
+    rpc.respond('read-stream', this.onreadstream.bind(this))
+    rpc.respond('history-stream', this.onhistorystream.bind(this))
+    rpc.respond('stream-read', this.onstreamread.bind(this))
+    rpc.respond('stream-destroy', this.onstreamdestroy.bind(this))
 
     rpc.respond('getHeader', this.ongetheader.bind(this))
     rpc.respond('close', this.onclose.bind(this))
@@ -380,9 +385,9 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onbatch (request, rpc) {
-    const id = randomId((id) => this.checkouts.has(id))
     const batch = this.bee.batch()
 
+    const id = randomId((id) => this.checkouts.has(id))
     this.checkouts.set(id, batch)
     // batch.once('close', () => this.checkouts.delete(id)) // Batch does not have 'close' event to clear itself
 
@@ -404,19 +409,27 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap()
   }
 
-  async onrsopen (request, rpc) {
-    const id = randomId((id) => this.streams.has(id))
+  async onreadstream (request, rpc) {
     const stream = this._bee(request).createReadStream(request.range || undefined, request.options || undefined)
 
+    const id = randomId((id) => this.streams.has(id))
     const reader = new StreamReader(this, stream, { _id: request._id })
-
     this.streams.set(id, reader)
-    // stream.once('close', () => this.streams.delete(id))
 
     return this._wrap(id, request)
   }
 
-  async onrsread (request, rpc) {
+  async onhistorystream (request, rpc) {
+    const stream = this._bee(request).createHistoryStream(request.options || undefined)
+
+    const id = randomId((id) => this.streams.has(id))
+    const reader = new StreamReader(this, stream, { _id: request._id })
+    this.streams.set(id, reader)
+
+    return this._wrap(id, request)
+  }
+
+  async onstreamread (request, rpc) {
     const reader = this.streams.get(request._streamId)
     if (!reader) return this._wrap(undefined, request)
 
@@ -425,7 +438,7 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap({ value, ended: reader.ended }, request)
   }
 
-  async onrsdestroy (request, rpc) {
+  async onstreamdestroy (request, rpc) {
     const reader = this.streams.get(request._streamId)
     if (!reader) return this._wrap(undefined, request)
 
@@ -434,16 +447,14 @@ class ProtobeeServer extends ReadyResource {
     return this._wrap(undefined, request)
   }
 
-  // TODO: createReadStream
-  // TODO: createHistoryStream
   // TODO: createDiffStream
   // TODO: getAndWatch
   // TODO: watch
 
   async oncheckout (request, rpc) {
-    const id = randomId((id) => this.checkouts.has(id))
     const checkout = this.bee.checkout(request.version, request.options || {})
 
+    const id = randomId((id) => this.checkouts.has(id))
     this.checkouts.set(id, checkout)
     checkout.once('close', () => this.checkouts.delete(id))
 
@@ -451,9 +462,9 @@ class ProtobeeServer extends ReadyResource {
   }
 
   async onsnapshot (request, rpc) {
-    const id = randomId((id) => this.checkouts.has(id))
     const snapshot = this.bee.snapshot(request.options || {})
 
+    const id = randomId((id) => this.checkouts.has(id))
     this.checkouts.set(id, snapshot)
     snapshot.once('close', () => this.checkouts.delete(id))
 
@@ -479,16 +490,16 @@ Protobee.Server = ProtobeeServer
 
 module.exports = Protobee
 
-class ReadStream extends Readable {
-  constructor (protobee, range, options) {
+class ProxyStream extends Readable {
+  constructor (protobee, type, args) {
     super()
 
     this._id = protobee._id
     this.protobee = protobee
     this.rpc = protobee.rpc
 
-    this.range = range
-    this.options = options
+    this.type = type
+    this.args = args
 
     this.streamId = null
   }
@@ -498,18 +509,18 @@ class ReadStream extends Readable {
   _destroy (cb) { this._destroyp().then(cb, cb) }
 
   async _openp () {
-    this.streamId = this.protobee._unwrap(await this.rpc.request('read-stream-open', { _id: this._id, range: this.range, options: this.options }))
+    this.streamId = this.protobee._unwrap(await this.rpc.request(this.type, { _id: this._id, ...this.args }))
   }
 
   async _readp () {
-    const { value, ended } = this.protobee._unwrap(await this.rpc.request('read-stream-read', { _id: this._id, _streamId: this.streamId }))
+    const { value, ended } = this.protobee._unwrap(await this.rpc.request('stream-read', { _id: this._id, _streamId: this.streamId }))
 
     this.push(value)
     if (ended) this.push(null)
   }
 
   async _destroyp () {
-    this.protobee._unwrap(await this.rpc.request('read-stream-destroy', { _id: this._id, _streamId: this.streamId }))
+    this.protobee._unwrap(await this.rpc.request('stream-destroy', { _id: this._id, _streamId: this.streamId }))
   }
 }
 
