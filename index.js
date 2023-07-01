@@ -346,7 +346,14 @@ class ProtobeeServer extends ReadyResource {
     rpc.respond('close', this.onclose.bind(this))
 
     this.connections.add(rpc)
-    rpc.once('close', () => this.connections.delete(rpc))
+    rpc.once('close', () => {
+      this.connections.delete(rpc)
+      this._ondisconnection(rpc)
+    })
+  }
+
+  _ondisconnection (rpc) {
+    // TODO: close resources linked only to the connection like streams, etc
   }
 
   _onappend () {
