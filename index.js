@@ -66,16 +66,22 @@ class Protobee extends ReadyResource {
       socket.userData = rpc.mux
       rpc.once('close', () => socket.destroy())
 
-      rpc.respond('sync', debounceify(this._onsync.bind(this))) // It doesn't reply back (event) so it's safe to debounce
+      rpc.respond('sync', debounceify(this._onsync.bind(this, rpc))) // It doesn't reply back (event) so it's safe to debounce
 
       try {
         await waitForRPC(rpc)
         this.rpc = rpc
         break
       } catch (err) {
+        if (backoff.left === 0) this.close().catch(safetyCatch)
         await backoff(err)
       }
     }
+
+    // TODO: this and the close above are needed due not sharing the DHT instance but needs to share it
+    this.rpc.once('close', () => {
+      this.close().catch(safetyCatch)
+    })
 
     if (this._checkout) {
       const response = await this.rpc.request('checkout', { version: this._checkout.version, options: this._checkout.options })
@@ -95,16 +101,14 @@ class Protobee extends ReadyResource {
   }
 
   async _close () {
-    if (this._id) {
-      if (!this._flushed) {
-        // Explicitily closing would not be needed if server auto destroys client linked resources
-        await this.rpc.request('close', { _id: this._id })
-      }
+    // It's good to close explicitly, although it's not needed if server auto destroys client linked resources
+    if (this._id && !this._flushed) {
+      if (!this.rpc.closed) await this.rpc.request('close', { _id: this._id })
     }
 
     if (this._batch) return
 
-    await this.rpc.destroy()
+    this.rpc.destroy()
 
     if (this._autoDestroy) await this.dht.destroy()
   }
@@ -138,7 +142,7 @@ class Protobee extends ReadyResource {
   }
 
   // Debounced to avoid race conditions in case second update finishes first
-  async _onsync (request, rpc) {
+  async _onsync (rpc, request) {
     await this.update()
   }
 
@@ -272,9 +276,8 @@ class ProtobeeServer extends ReadyResource {
 
     this.server = null
     this.connections = new Set()
-
-    this.instances = new Map()
-    this.streams = new Map()
+    this.instances = new Resources()
+    this.streams = new Resources()
 
     this.core.on('append', this._onappend.bind(this))
 
@@ -296,16 +299,6 @@ class ProtobeeServer extends ReadyResource {
     if (this._autoDestroy) await this.dht.destroy()
 
     await this.bee.close()
-
-    for (const [id, checkout] of this.instances) {
-      this.instances.delete(id)
-      await checkout.close()
-    }
-
-    for (const [id, reader] of this.streams) {
-      this.streams.delete(id)
-      await reader.destroy()
-    }
   }
 
   _onfirewall (publicKey, remotePayload, from) {
@@ -322,38 +315,49 @@ class ProtobeeServer extends ReadyResource {
     socket.setKeepAlive(5000)
     rpc.once('close', () => socket.destroy())
 
-    rpc.respond('sync', this.onsync.bind(this))
+    rpc.respond('sync', this.onsync.bind(this, rpc))
 
-    rpc.respond('put', this.onput.bind(this))
-    rpc.respond('get', this.onget.bind(this))
-    rpc.respond('del', this.ondel.bind(this))
-    rpc.respond('peek', this.onpeek.bind(this))
+    rpc.respond('put', this.onput.bind(this, rpc))
+    rpc.respond('get', this.onget.bind(this, rpc))
+    rpc.respond('del', this.ondel.bind(this, rpc))
+    rpc.respond('peek', this.onpeek.bind(this, rpc))
 
-    rpc.respond('checkout', this.oncheckout.bind(this))
-    rpc.respond('snapshot', this.onsnapshot.bind(this))
+    rpc.respond('checkout', this.oncheckout.bind(this, rpc))
+    rpc.respond('snapshot', this.onsnapshot.bind(this, rpc))
 
-    rpc.respond('batch', this.onbatch.bind(this))
-    rpc.respond('lock', this.onlock.bind(this))
-    rpc.respond('flush', this.onflush.bind(this))
+    rpc.respond('batch', this.onbatch.bind(this, rpc))
+    rpc.respond('lock', this.onlock.bind(this, rpc))
+    rpc.respond('flush', this.onflush.bind(this, rpc))
 
-    rpc.respond('read-stream', this.onreadstream.bind(this))
-    rpc.respond('history-stream', this.onhistorystream.bind(this))
-    rpc.respond('diff-stream', this.ondiffstream.bind(this))
-    rpc.respond('stream-read', this.onstreamread.bind(this))
-    rpc.respond('stream-destroy', this.onstreamdestroy.bind(this))
+    rpc.respond('read-stream', this.onreadstream.bind(this, rpc))
+    rpc.respond('history-stream', this.onhistorystream.bind(this, rpc))
+    rpc.respond('diff-stream', this.ondiffstream.bind(this, rpc))
+    rpc.respond('stream-read', this.onstreamread.bind(this, rpc))
+    rpc.respond('stream-destroy', this.onstreamdestroy.bind(this, rpc))
 
-    rpc.respond('getHeader', this.ongetheader.bind(this))
-    rpc.respond('close', this.onclose.bind(this))
+    rpc.respond('getHeader', this.ongetheader.bind(this, rpc))
+    rpc.respond('close', this.onclose.bind(this, rpc))
 
     this.connections.add(rpc)
+
     rpc.once('close', () => {
       this.connections.delete(rpc)
-      this._ondisconnection(rpc)
+      this._ondisconnection(rpc) // Runs on background, it doesn't crash
     })
   }
 
-  _ondisconnection (rpc) {
-    // TODO: close resources linked only to the connection like streams, etc
+  async _ondisconnection (rpc, resources) {
+    while (true) {
+      const instance = this.instances.shift(rpc)
+      if (instance === null) break
+      await instance.close().catch(safetyCatch)
+    }
+
+    while (true) {
+      const stream = this.streams.shift(rpc)
+      if (stream === null) break
+      await stream.destroy().catch(safetyCatch)
+    }
   }
 
   _onappend () {
@@ -364,156 +368,204 @@ class ProtobeeServer extends ReadyResource {
     }
   }
 
-  _bee (request) {
-    if (request && request._id) return this.instances.get(request._id)
+  _bee (request, rpc) {
+    if (request && request._id) return this.instances.get(rpc, request._id)
     return this.bee
   }
 
-  _wrap (out, request) {
+  _wrap (out, request, rpc) {
     return {
       out,
-      sync: this.onsync(request)
+      sync: this.onsync(rpc, request)
     }
   }
 
-  onsync (request, rpc) {
+  onsync (rpc, request) {
     return {
       core: {
-        length: this._bee(request).core.length
+        length: this._bee(request, rpc).core.length
       },
       bee: {
-        version: this._bee(request).version
+        version: this._bee(request, rpc).version
       }
     }
   }
 
   // TODO: forward error as response
 
-  async onput (request, rpc) {
+  async onput (rpc, request) {
     const cas = request.cas ? defaultCasPut : null
-    return this._wrap(await this._bee(request).put(request.key, request.value, { cas }), request)
+    return this._wrap(await this._bee(request, rpc).put(request.key, request.value, { cas }), request, rpc)
   }
 
-  async onget (request, rpc) {
-    return this._wrap(await this._bee(request).get(request.key), request)
+  async onget (rpc, request) {
+    return this._wrap(await this._bee(request, rpc).get(request.key), request, rpc)
   }
 
-  async ondel (request, rpc) {
-    return this._wrap(await this._bee(request).del(request.key), request)
+  async ondel (rpc, request) {
+    return this._wrap(await this._bee(request, rpc).del(request.key), request, rpc)
   }
 
-  async onpeek (request, rpc) {
-    return this._wrap(await this._bee(request).peek(request.range, request.options), request)
+  async onpeek (rpc, request) {
+    return this._wrap(await this._bee(request, rpc).peek(request.range, request.options), request, rpc)
   }
 
-  async onbatch (request, rpc) {
+  async onbatch (rpc, request) {
     const batch = this.bee.batch()
+    const id = this.instances.add(rpc, batch)
 
-    const id = randomId((id) => this.instances.has(id))
-    this.instances.set(id, batch)
-    // batch.once('close', () => this.instances.delete(id)) // Batch does not have 'close' event to clear itself
-
-    return this._wrap(id, { _id: id })
+    return this._wrap(id, { _id: id }, rpc)
   }
 
-  async onlock (request, rpc) {
+  async onlock (rpc, request) {
     // TODO: should check and add protections so server doesn't crash if there is a bad client like forcing .lock() on non-batch, same for others
-    return this._wrap(await this._bee(request).lock(), request)
+    return this._wrap(await this._bee(request, rpc).lock(), request, rpc)
   }
 
-  async onflush (request, rpc) {
-    const batch = this.instances.get(request._id)
+  async onflush (rpc, request) {
+    const batch = this.instances.get(rpc, request._id)
     if (!batch) return this._wrap()
 
-    this.instances.delete(request._id) // Until batch have a 'close' event
+    this.instances.delete(rpc, request._id)
     await batch.flush()
 
     return this._wrap()
   }
 
-  async onreadstream (request, rpc) {
-    const stream = this._bee(request).createReadStream(request.range || undefined, request.options || undefined)
-
-    const id = randomId((id) => this.streams.has(id))
+  async onreadstream (rpc, request) {
+    const stream = this._bee(request, rpc).createReadStream(request.range || undefined, request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
-    this.streams.set(id, reader)
+    const id = this.streams.add(rpc, reader)
 
-    return this._wrap(id, request)
+    return this._wrap(id, request, rpc)
   }
 
-  async onhistorystream (request, rpc) {
-    const stream = this._bee(request).createHistoryStream(request.options || undefined)
-
-    const id = randomId((id) => this.streams.has(id))
+  async onhistorystream (rpc, request) {
+    const stream = this._bee(request, rpc).createHistoryStream(request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
-    this.streams.set(id, reader)
+    const id = this.streams.add(rpc, reader)
 
-    return this._wrap(id, request)
+    return this._wrap(id, request, rpc)
   }
 
-  async ondiffstream (request, rpc) {
-    const stream = this._bee(request).createDiffStream(request.otherVersion, request.range || undefined, request.options || undefined)
-
-    const id = randomId((id) => this.streams.has(id))
+  async ondiffstream (rpc, request) {
+    const stream = this._bee(request, rpc).createDiffStream(request.otherVersion, request.range || undefined, request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
-    this.streams.set(id, reader)
+    const id = this.streams.add(rpc, reader)
 
-    return this._wrap(id, request)
+    return this._wrap(id, request, rpc)
   }
 
-  async onstreamread (request, rpc) {
-    const reader = this.streams.get(request._streamId)
-    if (!reader) return this._wrap(undefined, request)
+  async onstreamread (rpc, request) {
+    const reader = this.streams.get(rpc, request._streamId)
+    if (!reader) return this._wrap(undefined, request, rpc)
 
     const value = await reader.read()
 
-    return this._wrap({ value, ended: reader.ended }, request)
+    return this._wrap({ value, ended: reader.ended }, request, rpc)
   }
 
-  async onstreamdestroy (request, rpc) {
-    const reader = this.streams.get(request._streamId)
-    if (!reader) return this._wrap(undefined, request)
+  async onstreamdestroy (rpc, request) {
+    const reader = this.streams.get(rpc, request._streamId)
+    if (!reader) return this._wrap(undefined, request, rpc)
 
+    this.streams.delete(rpc, request._streamId)
     await reader.destroy()
 
-    return this._wrap(undefined, request)
+    return this._wrap(undefined, request, rpc)
   }
 
   // TODO: getAndWatch
   // TODO: watch
 
-  async oncheckout (request, rpc) {
+  async oncheckout (rpc, request) {
     const checkout = this.bee.checkout(request.version, request.options || {})
+    const id = this.instances.add(rpc, checkout)
 
-    const id = randomId((id) => this.instances.has(id))
-    this.instances.set(id, checkout)
-    checkout.once('close', () => this.instances.delete(id))
-
-    return this._wrap(id, { _id: id })
+    return this._wrap(id, { _id: id }, rpc)
   }
 
-  async onsnapshot (request, rpc) {
+  async onsnapshot (rpc, request) {
     const snapshot = this.bee.snapshot(request.options || {})
+    const id = this.instances.add(rpc, snapshot)
 
-    const id = randomId((id) => this.instances.has(id))
-    this.instances.set(id, snapshot)
-    snapshot.once('close', () => this.instances.delete(id))
-
-    return this._wrap(id, { _id: id })
+    return this._wrap(id, { _id: id }, rpc)
   }
 
-  async ongetheader (request, rpc) {
-    return this._wrap(await this._bee(request).getHeader(request.options || {}), request)
+  async ongetheader (rpc, request) {
+    return this._wrap(await this._bee(request, rpc).getHeader(request.options || {}), request, rpc)
   }
 
-  async onclose (request, rpc) {
-    const checkout = this.instances.get(request._id)
+  async onclose (rpc, request) {
+    const checkout = this.instances.get(rpc, request._id)
     if (!checkout) return this._wrap()
 
-    this.instances.delete(request._id) // Batch does not have 'close' event to clear itself
+    this.instances.delete(rpc, request._id)
     await checkout.close()
 
     return this._wrap()
+  }
+}
+
+class Resources {
+  constructor () {
+    this.all = new Map()
+    this.clients = new Map()
+  }
+
+  get size () {
+    return this.all.size
+  }
+
+  add (rpc, value) {
+    const id = randomId((id) => this.all.has(id))
+
+    this.all.set(id, {
+      rpc,
+      value
+    })
+
+    const client = this.clients.get(rpc)
+    if (!client) this.clients.set(rpc, [id])
+    else client.push(id)
+
+    return id
+  }
+
+  get (rpc, id) {
+    const resource = this.all.get(id)
+    if (!resource) return null
+    if (resource.rpc !== rpc) throw new Error('RPC does not match the one from resource')
+
+    return resource.value
+  }
+
+  delete (rpc, id) {
+    const client = this.clients.get(rpc)
+    if (!client) throw new Error('Client not found')
+
+    const resource = this.all.get(id)
+    if (!resource) throw new Error('Resource not found')
+    if (resource.rpc !== rpc) throw new Error('RPC does not match the one from resource')
+
+    this.all.delete(id)
+
+    const i = client.indexOf(id)
+    if (i > -1) client.splice(i, 1)
+    if (client.length === 0) this.clients.delete(rpc)
+  }
+
+  shift (rpc) {
+    const client = this.clients.get(rpc)
+    if (!client) return null
+
+    const id = client.shift()
+    if (client.length === 0) this.clients.delete(rpc)
+
+    const value = this.get(rpc, id)
+    this.all.delete(id)
+
+    return value
   }
 }
 
@@ -547,6 +599,8 @@ class ProxyStream extends Readable {
   }
 
   async _destroyp () {
+    if (this.db.rpc.closed) return
+
     this.db._unwrap(await this.db.rpc.request('stream-destroy', { _id: this.db._id, _streamId: this.streamId }))
   }
 }
