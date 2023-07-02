@@ -3,6 +3,12 @@
   "version": "0.0.6",
   "description": "Hyperbee over Protomux. Primary server that allows many writable clients",
   "main": "index.js",
+  "files": [
+    "index.js",
+    "protobee-client.js",
+    "protobee-server.js",
+    "lib/*.js"
+  ],
   "scripts": {
     "test": "standard && brittle test/*.js"
   },
