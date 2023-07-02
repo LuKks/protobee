@@ -88,20 +88,19 @@ Practically the same API as Hyperbee:
 
 https://github.com/holepunchto/hyperbee
 
-## Differences with Hyperbee
+## Warning
+
+Differences with Hyperbee:
 
 - The way you create the Protobee instance is different but this is expected.
 - Errors are very different at the moment.
 - Possible bugs around the `version` property due core truncates (needs more debugging and testing).
-- Key and value encodings are not the same because we can't allow passing custom encoding functions.
 - In `bee.put` method the `cas` option is a bool, and if you pass a function it will throw.
 - In `bee.del` method the `cas` option is not supported, and it will throw if you use it.
 
-Pretty sure that we can find a really good middle ground for the encodings.
+Notes:
 
-Needs more debugging to confirm that there are no leaks around all the instances and streams that gets created.
-
-A bad client could mess up the server by creating unlimited snapshots or sending bad requests (needs protection settings).
+- A bad client can create unlimited snapshots or sending bad requests (needs protection settings).
 
 Current unsupported methods:
 
