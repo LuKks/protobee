@@ -4,6 +4,9 @@ const safetyCatch = require('safety-catch')
 const DHT = require('hyperdht')
 const ProtomuxRPC = require('protomux-rpc')
 const sameObject = require('same-object')
+const sodium = require('sodium-universal')
+const crypto = require('hypercore-crypto')
+const b4a = require('b4a')
 const StreamReader = require('./lib/stream-reader.js')
 const Resources = require('./lib/resources.js')
 
@@ -13,6 +16,12 @@ module.exports = class ProtobeeServer extends ReadyResource {
 
     this.core = bee.core
     this.bee = bee
+
+    this.primaryKey = opts.primaryKey || null
+    this._keyPair = null
+
+    this.clientPrimaryKey = null
+    this._clientKeyPair = null
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
@@ -27,14 +36,27 @@ module.exports = class ProtobeeServer extends ReadyResource {
     this.ready().catch(safetyCatch)
   }
 
+  get key () {
+    return this._keyPair ? this._keyPair.publicKey : null
+  }
+
   async _open () {
     await this.bee.ready()
 
     if (!this.core.writable) throw new Error('Hyperbee must be writable')
 
+    if (!this.primaryKey) {
+      const seed = this.core.keyPair.secretKey ? this.core.keyPair.secretKey.slice(0, 32) : crypto.randomBytes(32)
+      this.primaryKey = derivePrimaryKey(seed, 'protobee-server')
+    }
+    this._keyPair = crypto.keyPair(this.primaryKey)
+
+    this.clientPrimaryKey = derivePrimaryKey(this.primaryKey, 'protobee-client')
+    this._clientKeyPair = crypto.keyPair(this.clientPrimaryKey)
+
     this.server = this.dht.createServer({ firewall: this._onfirewall.bind(this) })
     this.server.on('connection', this._onconnection.bind(this))
-    await this.server.listen(this.core.keyPair)
+    await this.server.listen(this._keyPair)
   }
 
   async _close () {
@@ -45,7 +67,7 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   _onfirewall (publicKey, remotePayload, from) {
-    return !this.core.keyPair.publicKey.equals(publicKey)
+    return !this._clientKeyPair.publicKey.equals(publicKey)
   }
 
   _onconnection (socket) {
@@ -252,4 +274,13 @@ module.exports = class ProtobeeServer extends ReadyResource {
 
 function defaultCasPut (prev, next) {
   return !sameObject(prev.value, next.value, { strict: true })
+}
+
+function derivePrimaryKey (primaryKey, name) {
+  if (!b4a.isBuffer(primaryKey)) primaryKey = b4a.from(primaryKey)
+  if (!b4a.isBuffer(name)) name = b4a.from(name)
+
+  const out = b4a.alloc(32)
+  sodium.crypto_generichash_batch(out, [name], primaryKey)
+  return out
 }

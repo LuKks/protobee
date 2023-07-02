@@ -17,14 +17,17 @@
   },
   "homepage": "https://github.com/LuKks/protobee#readme",
   "dependencies": {
+    "b4a": "^1.6.4",
     "compact-encoding": "^2.12.0",
     "debounceify": "^1.0.0",
+    "hypercore-crypto": "^3.3.1",
     "hyperdht": "^6.6.1",
     "like-retry": "^1.1.1",
     "protomux-rpc": "^1.4.0",
     "ready-resource": "^1.0.0",
     "safety-catch": "^1.0.2",
     "same-object": "^1.0.2",
+    "sodium-universal": "^4.0.0",
     "streamx": "^2.15.0"
   },
   "devDependencies": {

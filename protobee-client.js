@@ -5,18 +5,19 @@ const DHT = require('hyperdht')
 const ProtomuxRPC = require('protomux-rpc')
 const debounceify = require('debounceify')
 const retry = require('like-retry')
+const crypto = require('hypercore-crypto')
 const waitForRPC = require('./lib/wait-for-rpc.js')
 const ProxyStream = require('./lib/proxy-stream.js')
 
 module.exports = class Protobee extends ReadyResource {
-  constructor (keyPair, opts = {}) {
+  constructor (serverPublicKey, primaryKey, opts = {}) {
     super()
 
-    this._keyPair = keyPair
+    this.serverPublicKey = serverPublicKey
+    this.primaryKey = primaryKey
+    this._keyPair = crypto.keyPair(this.primaryKey)
 
     this.core = {
-      key: this._keyPair.publicKey,
-      keyPair: this._keyPair,
       length: 0
     }
     this.version = 1
@@ -48,10 +49,10 @@ module.exports = class Protobee extends ReadyResource {
     }
 
     for await (const backoff of retry({ max: 1 })) {
-      const socket = this.dht.connect(this._keyPair.publicKey, { keyPair: this._keyPair })
+      const socket = this.dht.connect(this.serverPublicKey, { keyPair: this._keyPair })
 
       const rpc = new ProtomuxRPC(socket, {
-        id: this._keyPair.publicKey,
+        id: this.serverPublicKey,
         valueEncoding: c.any
       })
 
@@ -187,7 +188,7 @@ module.exports = class Protobee extends ReadyResource {
   batch () {
     if (this._id) throw new Error('Batch is only allowed from the main instance')
 
-    return new Protobee(this._keyPair, {
+    return new Protobee(this.serverPublicKey, this.primaryKey, {
       _root: this,
       dht: this.dht,
       rpc: this.rpc,
@@ -233,7 +234,7 @@ module.exports = class Protobee extends ReadyResource {
   checkout (version, options) {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
 
-    return new Protobee(this._keyPair, {
+    return new Protobee(this.serverPublicKey, this.primaryKey, {
       bootstrap: this._bootstrap, // TODO: it should share the same DHT instance but without auto destroying it if the main protobee instance closes
       _checkout: { version, options },
       _sync: this._createSync(version)
@@ -243,7 +244,7 @@ module.exports = class Protobee extends ReadyResource {
   snapshot (options) {
     if (this._id) throw new Error('Snapshot is only allowed from the main instance')
 
-    return new Protobee(this._keyPair, {
+    return new Protobee(this.serverPublicKey, this.primaryKey, {
       bootstrap: this._bootstrap,
       _snapshot: { options },
       _sync: this._createSync()

@@ -20,7 +20,7 @@ const Protobee = require('protobee')
 const core = new Hypercore(RAM)
 const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any })
 
-const server = new Protobee(bee)
+const server = new Protobee.Server(bee)
 await server.ready()
 
 // Client side
@@ -41,13 +41,14 @@ await db2.get('/a') // => { seq, key, value }
 
 ## API
 
-#### `const server = new Protobee(bee, [options])`
+#### `const server = new Protobee.Server(bee, [options])`
 
 Creates a DHT server that handles RPC requests supporting the Hyperbee API.
 
 Available `options`:
 ```js
 {
+  primaryKey, // Secret seed
   dht, // DHT instance
   bootstrap // Array of bootstrap nodes (only if you didn't pass a DHT instance)
 }
@@ -57,17 +58,21 @@ Available `options`:
 
 Wait for the server to be listening on the Hypercore key pair of the Hyperbee.
 
-#### `const db = new Protobee(keyPair, [options])`
+#### `server.key`
+
+Public key of the server. Client can use it to connect to the server.
+
+#### `server.clientPrimaryKey`
+
+Default client secret primary key. Client can use it for authentication.
+
+#### `const db = new Protobee(serverKey, primaryKey, [options])`
 
 Creates a RPC client to connects to the server.
 
-`keyPair` must be the Hypercore key pair of the Hyperbee:
-```js
-{
-  publicKey,
-  secretKey
-}
-```
+`serverKey` must be `server.key`, it's the server public key.
+
+`primaryKey` must be `server.clientPrimaryKey`, it's the secret client seed.
 
 Available `options`:
 ```js

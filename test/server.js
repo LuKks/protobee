@@ -1,5 +1,37 @@
 const test = require('brittle')
-const { create } = require('./helpers/index.js')
+const Hypercore = require('hypercore')
+const b4a = require('b4a')
+const { create, createTmpDir } = require('./helpers/index.js')
+
+test('server key pair and client primary key based on Hypercore', async function (t) {
+  const tmpdir = createTmpDir(t)
+
+  const a = await create(t, { core: new Hypercore(tmpdir) })
+  await a.server.close()
+
+  const b = await create(t, { core: new Hypercore(tmpdir) })
+  await b.server.close()
+
+  t.ok(a.server.key)
+  t.ok(a.server.clientPrimaryKey)
+
+  t.alike(a.server.key, b.server.key)
+  t.alike(a.server.clientPrimaryKey, b.server.clientPrimaryKey)
+})
+
+test('custom server primary key', async function (t) {
+  const a = await create(t, { primaryKey: b4a.alloc(32).fill('a') })
+  await a.server.close()
+
+  const b = await create(t, { primaryKey: b4a.alloc(32).fill('a') })
+  await b.server.close()
+
+  t.ok(a.server.key)
+  t.ok(a.server.clientPrimaryKey)
+
+  t.alike(a.server.key, b.server.key)
+  t.alike(a.server.clientPrimaryKey, b.server.clientPrimaryKey)
+})
 
 test('server resources', async function (t) {
   const { server, db } = await create(t)
