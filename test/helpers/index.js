@@ -19,7 +19,7 @@ async function create (t, opts = {}) {
   t.teardown(() => testnet.destroy(), { order: Infinity })
 
   const core = opts.core || new Hypercore(RAM)
-  const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any }) // TODO: fix this (cas, etc)
+  const bee = new Hyperbee(core, { keyEncoding: opts.keyEncoding || c.any, valueEncoding: opts.valueEncoding || c.any }) // TODO: fix this (cas, etc)
 
   const server = new Protobee.Server(bee, { bootstrap, primaryKey: opts.primaryKey })
   await server.ready()
