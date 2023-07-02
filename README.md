@@ -24,7 +24,7 @@ const server = new Protobee.Server(bee)
 await server.ready()
 
 // Client side
-const db = new Protobee(core.keyPair)
+const db = new Protobee(server.key, server.clientPrimaryKey)
 await db.ready()
 
 console.log(db.version) // => 1
@@ -32,7 +32,7 @@ await db.put('/a', '1')
 console.log(db.version) // => 2
 
 // Another client
-const db2 = new Protobee(core.keyPair)
+const db2 = new Protobee(server.key, server.clientPrimaryKey)
 await db2.ready()
 
 console.log(db2.version) // => 2
