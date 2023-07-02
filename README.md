@@ -12,6 +12,7 @@ Warning: this is experimental, and it might contain edge case bugs.
 
 ```js
 const RAM = require('random-access-memory')
+const c = require('compact-encoding')
 const Hypercore = require('hypercore')
 const Hyperbee = require('hyperbee')
 const Protobee = require('protobee')
