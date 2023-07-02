@@ -1,6 +1,6 @@
 {
   "name": "protobee",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Hyperbee over Protomux. Primary server that allows many writable clients",
   "main": "index.js",
   "scripts": {
