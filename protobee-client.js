@@ -10,12 +10,12 @@ const waitForRPC = require('./lib/wait-for-rpc.js')
 const ProxyStream = require('./lib/proxy-stream.js')
 
 module.exports = class Protobee extends ReadyResource {
-  constructor (serverPublicKey, primaryKey, opts = {}) {
+  constructor (serverPublicKey, seed, opts = {}) {
     super()
 
     this.serverPublicKey = serverPublicKey
-    this.primaryKey = primaryKey
-    this._keyPair = crypto.keyPair(this.primaryKey)
+    this.seed = seed
+    this._keyPair = crypto.keyPair(this.seed)
 
     this.core = {
       length: 0
@@ -188,7 +188,7 @@ module.exports = class Protobee extends ReadyResource {
   batch () {
     if (this._id) throw new Error('Batch is only allowed from the main instance')
 
-    return new Protobee(this.serverPublicKey, this.primaryKey, {
+    return new Protobee(this.serverPublicKey, this.seed, {
       _root: this,
       dht: this.dht,
       rpc: this.rpc,
@@ -234,7 +234,7 @@ module.exports = class Protobee extends ReadyResource {
   checkout (version, options) {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
 
-    return new Protobee(this.serverPublicKey, this.primaryKey, {
+    return new Protobee(this.serverPublicKey, this.seed, {
       bootstrap: this._bootstrap, // TODO: it should share the same DHT instance but without auto destroying it if the main protobee instance closes
       _checkout: { version, options },
       _sync: this._createSync(version)
@@ -244,7 +244,7 @@ module.exports = class Protobee extends ReadyResource {
   snapshot (options) {
     if (this._id) throw new Error('Snapshot is only allowed from the main instance')
 
-    return new Protobee(this.serverPublicKey, this.primaryKey, {
+    return new Protobee(this.serverPublicKey, this.seed, {
       bootstrap: this._bootstrap,
       _snapshot: { options },
       _sync: this._createSync()

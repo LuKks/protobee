@@ -18,9 +18,11 @@ module.exports = class ProtobeeServer extends ReadyResource {
     this.bee = bee
 
     this.primaryKey = opts.primaryKey || null
+
+    this._seed = null
     this._keyPair = null
 
-    this.clientPrimaryKey = null
+    this.clientSeed = null
     this._clientKeyPair = null
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
@@ -47,12 +49,16 @@ module.exports = class ProtobeeServer extends ReadyResource {
 
     if (!this.primaryKey) {
       const seed = this.core.keyPair.secretKey ? this.core.keyPair.secretKey.slice(0, 32) : crypto.randomBytes(32)
-      this.primaryKey = derivePrimaryKey(seed, 'protobee-server')
+      this.primaryKey = derivePrimaryKey(seed, 'protobee-primary-key')
     }
-    this._keyPair = crypto.keyPair(this.primaryKey)
 
-    this.clientPrimaryKey = derivePrimaryKey(this.primaryKey, 'protobee-client')
-    this._clientKeyPair = crypto.keyPair(this.clientPrimaryKey)
+    this._seed = derivePrimaryKey(this.primaryKey, 'protobee-server')
+    this._keyPair = crypto.keyPair(this._seed)
+
+    this.clientSeed = derivePrimaryKey(this.primaryKey, 'protobee-client')
+    this._clientKeyPair = crypto.keyPair(this.clientSeed)
+
+    this.clientPrimaryKey = this.clientSeed // Compat, remove later
 
     this.server = this.dht.createServer({ firewall: this._onfirewall.bind(this) })
     this.server.on('connection', this._onconnection.bind(this))
