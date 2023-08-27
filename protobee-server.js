@@ -10,20 +10,20 @@ const b4a = require('b4a')
 const StreamReader = require('./lib/stream-reader.js')
 const Resources = require('./lib/resources.js')
 
+const [NS] = crypto.namespace('protobee', 1)
+
 module.exports = class ProtobeeServer extends ReadyResource {
-  constructor (bee, opts = {}) {
+  constructor (store, opts = {}) {
     super()
+
+    this.store = store
 
     this.core = bee.core
     this.bee = bee
 
-    this.primaryKey = opts.primaryKey || null
-
-    this._seed = null
     this._keyPair = null
-
-    this.clientSeed = null
     this._clientKeyPair = null
+    this.clientSeed = null
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
@@ -43,22 +43,15 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   async _open () {
+    await this.store.ready()
+
     await this.bee.ready()
 
     if (!this.core.writable) throw new Error('Hyperbee must be writable')
 
-    if (!this.primaryKey) {
-      const seed = this.core.keyPair.secretKey ? this.core.keyPair.secretKey.slice(0, 32) : crypto.randomBytes(32)
-      this.primaryKey = derivePrimaryKey(seed, 'protobee-primary-key')
-    }
-
-    this._seed = derivePrimaryKey(this.primaryKey, 'protobee-server')
-    this._keyPair = crypto.keyPair(this._seed)
-
-    this.clientSeed = derivePrimaryKey(this.primaryKey, 'protobee-client')
-    this._clientKeyPair = crypto.keyPair(this.clientSeed)
-
-    this.clientPrimaryKey = this.clientSeed // Compat, remove later
+    this._keyPair = await this.store.createKeyPair('protobee-server')
+    this._clientKeyPair = await this.store.createKeyPair('protobee-client')
+    this.clientSeed = this._clientKeyPair.secretKey.slice(0, 32)
 
     this.server = this.dht.createServer({ firewall: this._onfirewall.bind(this) })
     this.server.on('connection', this._onconnection.bind(this))
@@ -79,12 +72,25 @@ module.exports = class ProtobeeServer extends ReadyResource {
   _onconnection (socket) {
     const rpc = new ProtomuxRPC(socket, {
       id: this.server.publicKey,
-      valueEncoding: c.any
+      valueEncoding: c.any,
+      handshakeEncoding: c.any
     })
 
     socket.userData = rpc.mux
     socket.setKeepAlive(5000)
     rpc.once('close', () => socket.destroy())
+
+    let core = null
+    let bee = null
+
+    rpc.once('open', (handshake) => {
+      console.log('rpc open', handshake)
+      // rpc.destroy()
+
+      core = this.store.get({ name: handshake.name })
+      bee = new Hyperbee(core)
+
+    })
 
     rpc.respond('sync', this.onsync.bind(this, rpc))
 
@@ -152,6 +158,7 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   onsync (rpc, request) {
+    console.log('onsync')
     return {
       core: {
         length: this._bee(request, rpc).core.length
@@ -282,11 +289,11 @@ function defaultCasPut (prev, next) {
   return !sameObject(prev.value, next.value, { strict: true })
 }
 
-function derivePrimaryKey (primaryKey, name) {
-  if (!b4a.isBuffer(primaryKey)) primaryKey = b4a.from(primaryKey)
+function deriveSeed (seed, name) {
+  if (!b4a.isBuffer(seed)) seed = b4a.from(seed)
   if (!b4a.isBuffer(name)) name = b4a.from(name)
 
   const out = b4a.alloc(32)
-  sodium.crypto_generichash_batch(out, [name], primaryKey)
+  sodium.crypto_generichash_batch(out, [NS, name], seed)
   return out
 }

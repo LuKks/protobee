@@ -18,14 +18,12 @@ const Hyperbee = require('hyperbee')
 const Protobee = require('protobee')
 
 // Server side
-const core = new Hypercore(RAM)
-const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any })
-
-const server = new Protobee.Server(bee)
+const store = new Corestore(RAM)
+const server = new Protobee.Server(store)
 await server.ready()
 
 // Client side
-const db = new Protobee(server.key, server.clientSeed)
+const db = new Protobee(server.key, server.clientSeed, 'custom-name')
 await db.ready()
 
 console.log(db.version) // => 1
@@ -33,25 +31,29 @@ await db.put('/a', '1')
 console.log(db.version) // => 2
 
 // Another client
-const db2 = new Protobee(server.key, server.clientSeed)
+const db2 = new Protobee(server.key, server.clientSeed, 'custom-name')
 await db2.ready()
 
 console.log(db2.version) // => 2
 await db2.get('/a') // => { seq, key, value }
+
+// New Hyperbee
+const db3 = new Protobee(server.key, server.clientSeed, 'different-name')
+await db3.ready()
+console.log(db3.version) // => 1
 ```
 
 ## API
 
-#### `const server = new Protobee.Server(bee, [options])`
+#### `const server = new Protobee.Server(store, [options])`
 
 Creates a DHT server that handles RPC requests supporting the Hyperbee API.
 
-`bee` must be a Hyperbee instance.
+`store` must be a Corestore instance.
 
 Available `options`:
 ```js
 {
-  primaryKey, // Secret primary key used to derive server and client key pairs
   dht, // DHT instance
   bootstrap // Array of bootstrap nodes (only if you didn't pass a DHT instance)
 }
@@ -69,13 +71,15 @@ Public key of the server. Client can use it to connect to the server.
 
 Default secret client seed. Client can use it for authentication.
 
-#### `const db = new Protobee(serverKey, seed, [options])`
+#### `const db = new Protobee(serverKey, seed, name, [options])`
 
 Creates a RPC client to connects to the server.
 
 `serverKey` must be `server.key`.
 
 `seed` must be `server.clientSeed`, it's used to generate the client key pair.
+
+`name` is the Corestore name option for the Hypercore that is used as storage for the Hyperbee.
 
 Available `options`:
 ```js
@@ -84,6 +88,8 @@ Available `options`:
   bootstrap // Array of bootstrap nodes (only if you didn't pass a DHT instance)
 }
 ```
+
+const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any })
 
 #### The rest of the API
 
@@ -95,7 +101,6 @@ https://github.com/holepunchto/hyperbee
 
 Differences with Hyperbee:
 
-- The way you create the Protobee instance is different but this is expected.
 - Errors are very different at the moment.
 - Possible bugs around the `version` property due core truncates (needs more debugging and testing).
 - In `bee.put` method the `cas` option is a bool, and if you pass a function it will throw.
@@ -103,7 +108,7 @@ Differences with Hyperbee:
 
 Notes:
 
-- A bad client can create unlimited snapshots or sending bad requests (needs protection settings).
+- A bad client can create unlimited snapshots or sending bad requests (missing protection settings).
 
 Current unsupported methods:
 

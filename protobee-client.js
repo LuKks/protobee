@@ -10,12 +10,12 @@ const waitForRPC = require('./lib/wait-for-rpc.js')
 const ProxyStream = require('./lib/proxy-stream.js')
 
 module.exports = class Protobee extends ReadyResource {
-  constructor (serverPublicKey, seed, opts = {}) {
+  constructor (serverPublicKey, seed, name, opts = {}) {
     super()
 
     this.serverPublicKey = serverPublicKey
     this.seed = seed
-    this._keyPair = crypto.keyPair(this.seed)
+    this.name = name
 
     this.core = {
       length: 0
@@ -33,9 +33,10 @@ module.exports = class Protobee extends ReadyResource {
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
     this._bootstrap = !opts.dht ? opts.bootstrap : undefined
+    this._keyPair = crypto.keyPair(seed)
 
     this.stream = null
-    this.rpc = opts.rpc
+    this.rpc = opts.rpc || null
 
     this.ready().catch(safetyCatch)
   }
@@ -53,7 +54,9 @@ module.exports = class Protobee extends ReadyResource {
 
       const rpc = new ProtomuxRPC(socket, {
         id: this.serverPublicKey,
-        valueEncoding: c.any
+        valueEncoding: c.any,
+        handshakeEncoding: c.any,
+        handshake: { name: this.name }
       })
 
       socket.setKeepAlive(5000)
