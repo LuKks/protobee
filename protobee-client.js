@@ -34,8 +34,7 @@ module.exports = class Protobee extends ReadyResource {
     this._autoDestroy = !opts.dht
     this._bootstrap = !opts.dht ? opts.bootstrap : undefined
 
-    this.stream = null
-    this.rpc = opts.rpc
+    this.rpc = opts.rpc || null
 
     this.ready().catch(safetyCatch)
   }
@@ -48,34 +47,15 @@ module.exports = class Protobee extends ReadyResource {
       return
     }
 
-    for await (const backoff of retry({ max: 1 })) {
-      const socket = this.dht.connect(this.serverPublicKey, { keyPair: this._keyPair })
+    this.rpc = new RPC(this)
 
-      const rpc = new ProtomuxRPC(socket, {
-        id: this.serverPublicKey,
-        valueEncoding: c.any
-      })
-
-      socket.setKeepAlive(5000)
-      socket.userData = rpc.mux
-      rpc.once('close', () => socket.destroy())
-
-      rpc.respond('sync', debounceify(this._onsync.bind(this, rpc))) // It doesn't reply back (event) so it's safe to debounce
-
-      try {
-        await waitForRPC(rpc)
-        this.rpc = rpc
-        break
-      } catch (err) {
-        if (backoff.left === 0) this.close().catch(safetyCatch)
-        await backoff(err)
-      }
+    try {
+      await this.rpc._connect({ max: 1 })
+    } catch (err) {
+      // Need to double check but I think ReadyResource will not close it otherwise
+      if (this._autoDestroy) await this.dht.destroy()
+      throw err
     }
-
-    // TODO: this and the close above are needed due not sharing the DHT instance but needs to share it
-    this.rpc.once('close', () => {
-      this.close().catch(safetyCatch)
-    })
 
     if (this._checkout) {
       const response = await this.rpc.request('checkout', { version: this._checkout.version, options: this._checkout.options })
@@ -137,7 +117,7 @@ module.exports = class Protobee extends ReadyResource {
 
   // Debounced to avoid race conditions in case second update finishes first
   async _onsync (rpc, request) {
-    await this.update()
+    await this.update().catch(safetyCatch)
   }
 
   // TODO: api method that does request + _id + error handling from the server response
@@ -255,5 +235,65 @@ module.exports = class Protobee extends ReadyResource {
     if (this.opened === false) await this.opening
 
     return this._unwrap(await this.rpc.request('getHeader', { _id: this._id, options }))
+  }
+}
+
+class RPC {
+  constructor (db) {
+    this.db = db
+    this._rpc = null
+  }
+
+  async _connect (options = {}) {
+    if (this._rpc && !this._rpc.closed) {
+      return
+    }
+
+    for await (const backoff of retry(options)) {
+      if (this.db.closing) return
+
+      const socket = this.db.dht.connect(this.db.serverPublicKey, { keyPair: this.db._keyPair })
+
+      const rpc = new ProtomuxRPC(socket, {
+        id: this.db.serverPublicKey,
+        valueEncoding: c.any
+      })
+
+      socket.setKeepAlive(5000)
+      socket.userData = rpc.mux
+      rpc.once('close', () => socket.destroy())
+
+      try {
+        await waitForRPC(rpc)
+        this._rpc = rpc
+        break
+      } catch (err) {
+        if (this.db.closing) return
+        if (backoff.left === 0) this.db.close().catch(safetyCatch)
+        await backoff(err)
+      }
+    }
+
+    this._rpc.respond('sync', debounceify(this.db._onsync.bind(this.db, this))) // It doesn't reply back (event) so it's safe to debounce
+
+    // TODO: this and the close above are needed due not sharing the DHT instance but needs to share it
+    // TODO: Now not needed due reconnecting. Commented out for reference until thing above is fixed
+    /* this._rpc.once('close', () => {
+      this.db.close().catch(safetyCatch)
+    }) */
+  }
+
+  get closed () {
+    return this._rpc.closed
+  }
+
+  // Note: If the RPC got closed, then the server will destroy all resources linked to it like batches, ongoing streams, etc
+  async request (method, value, options) {
+    await this._connect({ max: 1 })
+    return this._rpc.request(method, value, options)
+  }
+
+  destroy (err) {
+    return this._rpc.destroy(err)
   }
 }

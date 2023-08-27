@@ -30,3 +30,57 @@ test('multiple writer clients', async function (t) {
   await db2.close()
   await db3.close()
 })
+
+test('basic auto reconnect', async function (t) {
+  t.plan(1)
+
+  const { db } = await create(t)
+
+  db.rpc.destroy()
+  await db.put('/a')
+
+  db.rpc.destroy()
+  t.alike(await db.get('/a'), { seq: 1, key: '/a', value: null })
+})
+
+test('auto reconnect on failures', async function (t) {
+  t.plan(2)
+
+  const { db } = await create(t)
+
+  db.rpc.destroy()
+
+  await db.put('/a')
+  await db.put('/b')
+  await db.put('/c')
+
+  const actual = []
+
+  try {
+    db.rpc.destroy()
+
+    for await (const entry of db.createReadStream()) {
+      actual.push(entry.key)
+
+      if (entry.key === '/b') {
+        db.rpc.destroy()
+      }
+    }
+
+    t.fail('Should have failed')
+  } catch (err) {
+    t.is(err.code, 'CHANNEL_DESTROYED')
+  }
+
+  t.alike(actual, ['/a', '/b'])
+
+  await db.close()
+})
+
+test('reconnect should not throw if server is down', async function (t) {
+  const { db } = await create(t)
+
+  db.rpc.destroy()
+
+  await db.put('/a')
+})
