@@ -29,7 +29,7 @@ async function create (t, opts = {}) {
   if (opts.data) await bee.put('/test', 'abc')
 
   const db = new Protobee(server.key, server.clientSeed, { bootstrap })
-  await db.ready()
+  if (opts.ready !== false) await db.ready()
   t.teardown(() => db.close())
 
   return { server, db }

@@ -46,3 +46,13 @@ test('batch flush vs close', async function (t) {
 
   t.is(db.version, 2)
 })
+
+test('batch without ready', async function (t) {
+  const { db } = await create(t, { data: true, ready: false })
+
+  const b = db.batch()
+
+  t.alike(await b.get('/test'), { seq: 1, key: '/test', value: 'abc' })
+
+  await b.close()
+})

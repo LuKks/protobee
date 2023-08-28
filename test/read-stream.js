@@ -58,3 +58,17 @@ test('read stream out of range', async function (t) {
 
   t.pass()
 })
+
+test('stream without ready and with existing data', async function (t) {
+  const { db } = await create(t, { data: true, ready: false })
+
+  const actual = []
+
+  for await (const entry of db.createReadStream()) {
+    actual.push(entry.key)
+  }
+
+  t.alike(actual, ['/test'])
+
+  await db.close()
+})
