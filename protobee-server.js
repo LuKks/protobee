@@ -7,6 +7,7 @@ const sameObject = require('same-object')
 const sodium = require('sodium-universal')
 const crypto = require('hypercore-crypto')
 const b4a = require('b4a')
+const SubEncoder = require('sub-encoder')
 const StreamReader = require('./lib/stream-reader.js')
 const Resources = require('./lib/resources.js')
 
@@ -166,23 +167,35 @@ module.exports = class ProtobeeServer extends ReadyResource {
 
   async onput (rpc, request) {
     const cas = request.cas ? defaultCasPut : null
-    return this._wrap(await this._bee(request, rpc).put(request.key, request.value, { cas }), request, rpc)
+    const keyEncoding = toEncoding(request.keyEncoding)
+    const valueEncoding = toEncoding(request.valueEncoding)
+
+    return this._wrap(await this._bee(request, rpc).put(request.key, request.value, { cas, keyEncoding, valueEncoding }), request, rpc)
   }
 
   async onget (rpc, request) {
-    return this._wrap(await this._bee(request, rpc).get(request.key), request, rpc)
+    const keyEncoding = toEncoding(request.keyEncoding)
+    const valueEncoding = toEncoding(request.valueEncoding)
+
+    return this._wrap(await this._bee(request, rpc).get(request.key, { keyEncoding, valueEncoding }), request, rpc)
   }
 
   async ondel (rpc, request) {
-    return this._wrap(await this._bee(request, rpc).del(request.key), request, rpc)
+    const keyEncoding = toEncoding(request.keyEncoding)
+
+    return this._wrap(await this._bee(request, rpc).del(request.key, { keyEncoding }), request, rpc)
   }
 
   async onpeek (rpc, request) {
+    request.options = this._toEncoding(request.range, request.options)
+
     return this._wrap(await this._bee(request, rpc).peek(request.range, request.options), request, rpc)
   }
 
   async onbatch (rpc, request) {
-    const batch = this.bee.batch()
+    request.options = this._toEncoding(null, request.options)
+
+    const batch = this.bee.batch(request.options)
     const id = this.instances.add(rpc, batch)
 
     return this._wrap(id, { _id: id }, rpc)
@@ -204,6 +217,8 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   async onreadstream (rpc, request) {
+    request.options = this._toEncoding(request.range, request.options)
+
     const stream = this._bee(request, rpc).createReadStream(request.range || undefined, request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
     const id = this.streams.add(rpc, reader)
@@ -212,6 +227,8 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   async onhistorystream (rpc, request) {
+    request.options = this._toEncoding(null, request.options)
+
     const stream = this._bee(request, rpc).createHistoryStream(request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
     const id = this.streams.add(rpc, reader)
@@ -220,6 +237,8 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   async ondiffstream (rpc, request) {
+    request.options = this._toEncoding(request.range, request.options)
+
     const stream = this._bee(request, rpc).createDiffStream(request.otherVersion, request.range || undefined, request.options || undefined)
     const reader = new StreamReader(this, stream, { _id: request._id })
     const id = this.streams.add(rpc, reader)
@@ -250,6 +269,8 @@ module.exports = class ProtobeeServer extends ReadyResource {
   // TODO: watch
 
   async oncheckout (rpc, request) {
+    request.options = this._toEncoding(null, request.options)
+
     const checkout = this.bee.checkout(request.version, request.options || {})
     const id = this.instances.add(rpc, checkout)
 
@@ -257,6 +278,8 @@ module.exports = class ProtobeeServer extends ReadyResource {
   }
 
   async onsnapshot (rpc, request) {
+    request.options = this._toEncoding(null, request.options)
+
     const snapshot = this.bee.snapshot(request.options || {})
     const id = this.instances.add(rpc, snapshot)
 
@@ -276,6 +299,19 @@ module.exports = class ProtobeeServer extends ReadyResource {
 
     return this._wrap()
   }
+
+  _toEncoding (range, options) {
+    const keyEncoding = toEncoding(options && options.keyEncoding) || null
+    const valueEncoding = toEncoding(options && options.valueEncoding) || null
+
+    if (range) {
+      // This range vs options is due backward compat in Hyperbee
+      delete range.keyEncoding
+      delete range.valueEncoding
+    }
+
+    return { ...options, keyEncoding, valueEncoding }
+  }
 }
 
 function defaultCasPut (prev, next) {
@@ -289,4 +325,19 @@ function derivePrimaryKey (primaryKey, name) {
   const out = b4a.alloc(32)
   sodium.crypto_generichash_batch(out, [name], primaryKey)
   return out
+}
+
+function toEncoding (enc) {
+  if (!enc) return null
+
+  if (typeof enc === 'string') {
+    if (enc.startsWith('compact-encoding-')) {
+      const key = enc.slice(17)
+      return c[key]
+    }
+
+    return enc
+  }
+
+  return new SubEncoder(enc.prefix, enc.encoding)
 }

@@ -25,10 +25,13 @@ module.exports = class Protobee extends ReadyResource {
 
     this._id = 0
     this._root = opts._root || null
-    this._batch = !!opts._batch
+    this._batch = opts._batch || null
     this._checkout = opts._checkout || null
     this._snapshot = opts._snapshot || null
     this._flushed = false
+
+    this._keyEncoding = compactEncodingToString(opts.keyEncoding) || null
+    this._valueEncoding = compactEncodingToString(opts.valueEncoding) || null
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
@@ -41,7 +44,7 @@ module.exports = class Protobee extends ReadyResource {
 
   async _open () {
     if (this._batch) {
-      const response = await this.rpc.request('batch')
+      const response = await this.rpc.request('batch', { options: this._batch.options })
       this._id = response.out
       this._applySync(response.sync)
       return
@@ -140,15 +143,19 @@ module.exports = class Protobee extends ReadyResource {
     if (this.opened === false) await this.opening
     if (this._id && !this._batch) throw new Error('Can not put from a snapshot')
     if (opts && typeof opts.cas === 'function') throw new Error('Option cas as function is not supported')
-    const cas = !!(opts && opts.cas)
 
-    return this._unwrap(await this.rpc.request('put', { _id: this._id, key, value, cas }))
+    const cas = !!(opts && opts.cas)
+    const { keyEncoding, valueEncoding } = this._fromEncoding(null, opts)
+
+    return this._unwrap(await this.rpc.request('put', { _id: this._id, key, value, cas, keyEncoding, valueEncoding }))
   }
 
-  async get (key) {
+  async get (key, opts) {
     if (this.opened === false) await this.opening
 
-    return this._unwrap(await this.rpc.request('get', { _id: this._id, key }))
+    const { keyEncoding, valueEncoding } = this._fromEncoding(null, opts)
+
+    return this._unwrap(await this.rpc.request('get', { _id: this._id, key, keyEncoding, valueEncoding }))
   }
 
   async del (key, opts) {
@@ -156,23 +163,29 @@ module.exports = class Protobee extends ReadyResource {
     if (this._id && !this._batch) throw new Error('Can not del from a snapshot')
     if (opts && opts.cas) throw new Error('CAS option for del is not supported') // There is no good default, and dangerous to run a custom func remotely
 
-    return this._unwrap(await this.rpc.request('del', { _id: this._id, key }))
+    const { keyEncoding, valueEncoding } = this._fromEncoding(null, opts)
+
+    return this._unwrap(await this.rpc.request('del', { _id: this._id, key, keyEncoding, valueEncoding }))
   }
 
   async peek (range, options) {
     if (this.opened === false) await this.opening
 
+    options = this._fromEncoding(range, options)
+
     return this._unwrap(await this.rpc.request('peek', { _id: this._id, range, options }))
   }
 
-  batch () {
+  batch (options) {
     if (this._id) throw new Error('Batch is only allowed from the main instance')
+
+    options = this._fromEncoding(null, options)
 
     return new Protobee(this.serverPublicKey, this.seed, {
       _root: this,
       dht: this.dht,
       rpc: this.rpc,
-      _batch: true,
+      _batch: { options },
       _sync: this._createSync()
     })
   }
@@ -198,21 +211,29 @@ module.exports = class Protobee extends ReadyResource {
   }
 
   createReadStream (range, options) {
+    options = this._fromEncoding(range, options)
+
     return new ProxyStream(this, 'read-stream', { range, options })
   }
 
   createHistoryStream (options) {
+    options = this._fromEncoding(null, options)
+
     return new ProxyStream(this, 'history-stream', { options })
   }
 
   createDiffStream (otherVersion, range, options) {
     if (typeof otherVersion === 'object') otherVersion = otherVersion.version
 
+    options = this._fromEncoding(range, options)
+
     return new ProxyStream(this, 'diff-stream', { otherVersion, range, options })
   }
 
   checkout (version, options) {
     if (this._id) throw new Error('Checkout is only allowed from the main instance')
+
+    options = this._fromEncoding(null, options)
 
     return new Protobee(this.serverPublicKey, this.seed, {
       bootstrap: this._bootstrap, // TODO: it should share the same DHT instance but without auto destroying it if the main protobee instance closes
@@ -223,6 +244,8 @@ module.exports = class Protobee extends ReadyResource {
 
   snapshot (options) {
     if (this._id) throw new Error('Snapshot is only allowed from the main instance')
+
+    options = this._fromEncoding(null, options)
 
     return new Protobee(this.serverPublicKey, this.seed, {
       bootstrap: this._bootstrap,
@@ -235,6 +258,19 @@ module.exports = class Protobee extends ReadyResource {
     if (this.opened === false) await this.opening
 
     return this._unwrap(await this.rpc.request('getHeader', { _id: this._id, options }))
+  }
+
+  _fromEncoding (range, options) {
+    const keyEncoding = fromEncoding((range && range.keyEncoding) || (options && options.keyEncoding)) || this._keyEncoding
+    const valueEncoding = fromEncoding((range && range.valueEncoding) || (options && options.valueEncoding)) || this._valueEncoding
+
+    if (range) {
+      // This range vs options is due backward compat in Hyperbee
+      delete range.keyEncoding
+      delete range.valueEncoding
+    }
+
+    return { ...options, keyEncoding, valueEncoding }
   }
 }
 
@@ -296,4 +332,27 @@ class RPC {
   destroy (err) {
     return this._rpc.destroy(err)
   }
+}
+
+function fromEncoding (enc) {
+  if (!enc) return null
+
+  if (typeof enc === 'string') return enc
+
+  return {
+    prefix: enc.prefix.slice(0, -1),
+    encoding: enc.userEncoding.name
+  }
+}
+
+function compactEncodingToString (encoding) {
+  if (!encoding) return null
+
+  if (typeof encoding === 'string') return encoding
+
+  for (const key in c) {
+    if (c[key] === encoding) return 'compact-encoding-' + key
+  }
+
+  throw new Error('Encoding not found')
 }

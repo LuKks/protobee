@@ -19,13 +19,13 @@ const Protobee = require('protobee')
 
 // Server side
 const core = new Hypercore(RAM)
-const bee = new Hyperbee(core, { keyEncoding: c.any, valueEncoding: c.any })
+const bee = new Hyperbee(core)
 
 const server = new Protobee.Server(bee)
 await server.ready()
 
 // Client side
-const db = new Protobee(server.key, server.clientSeed)
+const db = new Protobee(server.key, server.clientSeed, { keyEncoding: c.any, valueEncoding: c.any })
 await db.ready()
 
 console.log(db.version) // => 1
@@ -80,6 +80,8 @@ Creates a RPC client to connects to the server.
 Available `options`:
 ```js
 {
+  keyEncoding, // It doesn't support custom codecs, only a string from codecs or a compact-encoding method
+  valueEncoding,
   dht, // DHT instance
   bootstrap // Array of bootstrap nodes (only if you didn't pass a DHT instance)
 }

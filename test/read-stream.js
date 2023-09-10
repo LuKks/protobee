@@ -64,7 +64,7 @@ test('stream without ready and with existing data', async function (t) {
 
   const actual = []
 
-  for await (const entry of db.createReadStream()) {
+  for await (const entry of db.createReadStream({ keyEncoding: 'utf-8', valueEncoding: 'utf-8' })) {
     actual.push(entry.key)
   }
 
