@@ -10,7 +10,8 @@ const c = require('compact-encoding')
 
 module.exports = {
   create,
-  createTmpDir
+  createTmpDir,
+  collect
 }
 
 async function create (t, opts = {}) {
@@ -19,7 +20,7 @@ async function create (t, opts = {}) {
   t.teardown(() => testnet.destroy(), { order: Infinity })
 
   const core = opts.core || new Hypercore(RAM)
-  const bee = new Hyperbee(core, { keyEncoding: opts.keyEncoding || c.any, valueEncoding: opts.valueEncoding || c.any }) // TODO: fix this (cas, etc)
+  const bee = new Hyperbee(core)
 
   const server = new Protobee.Server(bee, { bootstrap, primaryKey: opts.primaryKey })
   await server.ready()
@@ -28,7 +29,7 @@ async function create (t, opts = {}) {
   await core.ready()
   if (opts.data) await bee.put('/test', 'abc')
 
-  const db = new Protobee(server.key, server.clientSeed, { bootstrap })
+  const db = new Protobee(server.key, server.clientSeed, { bootstrap, keyEncoding: opts.keyEncoding || c.any, valueEncoding: opts.valueEncoding || c.any })
   if (opts.ready !== false) await db.ready()
   t.teardown(() => db.close())
 
@@ -40,4 +41,12 @@ function createTmpDir (t) {
   const dir = fs.mkdtempSync(tmpdir)
   t.teardown(() => fs.promises.rm(dir, { recursive: true }))
   return dir
+}
+
+async function collect (stream) {
+  const actual = []
+  for await (const entry of stream) {
+    actual.push(entry)
+  }
+  return actual
 }

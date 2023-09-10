@@ -52,7 +52,7 @@ test('batch without ready', async function (t) {
 
   const b = db.batch()
 
-  t.alike(await b.get('/test'), { seq: 1, key: '/test', value: 'abc' })
+  t.alike(await b.get('/test', { keyEncoding: 'utf-8', valueEncoding: 'utf-8' }), { seq: 1, key: '/test', value: 'abc' })
 
   await b.close()
 })
