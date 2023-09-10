@@ -30,8 +30,8 @@ module.exports = class Protobee extends ReadyResource {
     this._snapshot = opts._snapshot || null
     this._flushed = false
 
-    this._keyEncoding = compactEncodingToString(opts.keyEncoding) || null
-    this._valueEncoding = compactEncodingToString(opts.valueEncoding) || null
+    this._keyEncoding = opts.keyEncoding || null
+    this._valueEncoding = opts.valueEncoding || null
 
     this.dht = opts.dht || new DHT({ bootstrap: opts.bootstrap })
     this._autoDestroy = !opts.dht
@@ -261,8 +261,8 @@ module.exports = class Protobee extends ReadyResource {
   }
 
   _fromEncoding (range, options) {
-    const keyEncoding = fromEncoding((range && range.keyEncoding) || (options && options.keyEncoding)) || this._keyEncoding
-    const valueEncoding = fromEncoding((range && range.valueEncoding) || (options && options.valueEncoding)) || this._valueEncoding
+    const keyEncoding = fromEncoding((range && range.keyEncoding) || (options && options.keyEncoding) || this._keyEncoding)
+    const valueEncoding = fromEncoding((range && range.valueEncoding) || (options && options.valueEncoding) || this._valueEncoding)
 
     if (range) {
       // This range vs options is due backward compat in Hyperbee
@@ -339,19 +339,15 @@ function fromEncoding (enc) {
 
   if (typeof enc === 'string') return enc
 
-  return {
-    prefix: enc.prefix.slice(0, -1),
-    encoding: enc.userEncoding.name
+  if (enc.userEncoding) {
+    return {
+      prefix: enc.prefix.slice(0, -1),
+      encoding: enc.userEncoding.name
+    }
   }
-}
-
-function compactEncodingToString (encoding) {
-  if (!encoding) return null
-
-  if (typeof encoding === 'string') return encoding
 
   for (const key in c) {
-    if (c[key] === encoding) return 'compact-encoding-' + key
+    if (c[key] === enc) return 'compact-encoding-' + key
   }
 
   throw new Error('Encoding not found')

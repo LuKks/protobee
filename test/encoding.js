@@ -2,6 +2,7 @@ const test = require('brittle')
 const b4a = require('b4a')
 const SubEncoder = require('sub-encoder')
 const { create, collect } = require('./helpers/index.js')
+const Protobee = require('../index.js')
 
 test('basic encoding', async function (t) {
   const { db } = await create(t, { keyEncoding: 'binary', valueEncoding: 'json' })
@@ -68,4 +69,28 @@ test('value encoding', async function (t) {
 
   t.alike(await db.get('/a'), { seq: 1, key: b4a.from('/a'), value: b4a.from('1') })
   t.alike(await db.get('/b'), { seq: 2, key: b4a.from('/b'), value: b4a.from('"2"') })
+})
+
+test('sub encoding in the constructor', async function (t) {
+  const { server, db } = await create(t, { keyEncoding: 'binary', valueEncoding: 'binary' })
+
+  const keyEncodingA = new SubEncoder('a', 'utf-8')
+  const keyEncodingB = new SubEncoder('b', 'utf-8')
+
+  const db1 = new Protobee(server.key, server.clientSeed, { keyEncoding: keyEncodingA, valueEncoding: 'json', dht: db.dht })
+  const db2 = new Protobee(server.key, server.clientSeed, { keyEncoding: keyEncodingB, valueEncoding: 'json', dht: db.dht })
+
+  await db1.put('/a', '1')
+  t.alike(await db1.get('/a'), { seq: 1, key: '/a', value: '1' })
+
+  await db2.put('/b', '2')
+  t.alike(await db2.get('/b'), { seq: 2, key: '/b', value: '2' })
+
+  t.alike(await collect(db.createReadStream()), [
+    { seq: 1, key: b4a.concat([b4a.from('a'), b4a.alloc(1), b4a.from('/a')]), value: b4a.from('"1"') },
+    { seq: 2, key: b4a.concat([b4a.from('b'), b4a.alloc(1), b4a.from('/b')]), value: b4a.from('"2"') }
+  ])
+
+  await db1.close()
+  await db2.close()
 })
